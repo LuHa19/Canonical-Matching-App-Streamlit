@@ -31,20 +31,20 @@ if uploaded_file is not None:
             text = text.lower()
             for word in NOISE_WORDS:
                 text = text.replace(word, "")
-            text = re.sub(r'\b\d{5,6}[a-z]?\b', '', text)
             return text.strip()
 
-        # Extract 1-4 digit numbers from BOTH Title/H1 fingerprint and the URL address path
+        # Extract numbers from Title/H1 fingerprint AND URL path
         def get_numbers(row):
             fingerprint = str(row['fingerprint'])
             url_path = str(row['Address'])
             combined = f"{fingerprint} {url_path}"
             return frozenset(re.findall(r'\b\d{1,4}\b', combined))
 
+        # URL SEO Quality Score
         def url_quality_score(url):
             url_str = str(url).lower()
             score = 0
-            if 'delivery' in url_str:
+            if 'delivery' in url_str or '/1' in url_str:
                 score -= 50
             if re.search(r'/[a-z0-9]{4,8}\.html', url_str):
                 score -= 100
@@ -52,47 +52,71 @@ if uploaded_file is not None:
             score -= len(url_str) * 0.1
             return score
 
-        # Multi-layer conflict detector (Category, Shape, Material, & Features)
+        # Multi-layer Conflict Engine
         def has_conflict(row1, row2):
             text1 = f"{row1['fingerprint']} {row1['Address']}".lower()
             text2 = f"{row2['fingerprint']} {row2['Address']}".lower()
+            u1, u2 = str(row1['Address']).lower(), str(row2['Address']).lower()
 
-            # A. Category check
+            # A. Collection/Range Slug Check (e.g., /castle vs /aven)
+            c1 = re.search(r'/collections/([a-z0-9-]+)', u1)
+            c2 = re.search(r'/collections/([a-z0-9-]+)', u2)
+            if c1 and c2 and c1.group(1) != c2.group(1):
+                return True
+
+            # B. Numeric SKU Conflict (e.g., 120716c vs 120679c)
+            sku1 = re.findall(r'\b\d{5,6}[a-z]?\b', u1)
+            sku2 = re.findall(r'\b\d{5,6}[a-z]?\b', u2)
+            if sku1 and sku2 and set(sku1) != set(sku2):
+                return True
+
+            # C. Tray Depth & Spec Check (e.g., Shallow vs Extra Deep)
+            depths = ['shallow', 'extra deep', 'deep', 'jumbo']
+            d1 = {d for d in depths if d in text1}
+            d2 = {d for d in depths if d in text2}
+            if d1 and d2 and d1 != d2:
+                return True
+
+            # D. Strict Shape Check (Semi-Circular vs Circular vs Rectangular vs Square)
+            shapes = {}
+            for text, key in [(text1, 's1'), (text2, 's2')]:
+                tags = set()
+                if any(term in text for term in ['semi-circular', 'semi circular', 'semicircular']):
+                    tags.add('semi_circ')
+                elif any(term in text for term in ['circular', 'circle', 'round']):
+                    tags.add('circ')
+                
+                if any(term in text for term in ['rectangular', 'rectangle']):
+                    tags.add('rect')
+                if 'square' in text:
+                    tags.add('sq')
+                if any(term in text for term in ['trapezoidal', 'trapezoid']):
+                    tags.add('trap')
+                shapes[key] = tags
+
+            if shapes['s1'] and shapes['s2'] and shapes['s1'] != shapes['s2']:
+                return True
+
+            # E. Category Check
             categories = ['chair', 'desk', 'table', 'storage', 'screen', 'bench', 'tray', 'cabinet', 'bookcase']
-            c1 = {c for c in categories if c in text1}
-            c2 = {c for c in categories if c in text2}
-            if c1 and c2 and c1 != c2:
+            cat1 = {c for c in categories if c in text1}
+            cat2 = {c for c in categories if c in text2}
+            if cat1 and cat2 and cat1 != cat2:
                 return True
 
-            # B. Shape check
-            shape_groups = {
-                'rect': ['rectangular', 'rectangle'],
-                'circ': ['circular', 'round'],
-                'sq': ['square'],
-                'oval': ['oval'],
-                'trap': ['trapezoidal', 'trapezoid'],
-                'semi_circ': ['semi-circular', 'semicircular'],
-                'hex': ['hexagonal', 'hexagon']
-            }
-            s1 = {tag for tag, terms in shape_groups.items() if any(term in text1 for term in terms)}
-            s2 = {tag for tag, terms in shape_groups.items() if any(term in text2 for term in terms)}
-            if s1 and s2 and s1 != s2:
-                return True
-
-            # C. Material & Finish check (e.g., Seat Pad vs Wooden Seat)
-            material_groups = {
+            # F. Material & Finish Check
+            materials = {
                 'padded': ['seat pad', 'padded', 'upholstered', 'cushion', 'fabric seat'],
                 'wooden': ['beech', 'wooden', 'wood', 'plywood', 'timber'],
                 'plastic': ['plastic', 'polypropylene', 'poly'],
-                'mesh': ['mesh'],
-                'leather': ['leather', 'vinyl']
+                'mesh': ['mesh']
             }
-            m1 = {tag for tag, terms in material_groups.items() if any(term in text1 for term in terms)}
-            m2 = {tag for tag, terms in material_groups.items() if any(term in text2 for term in terms)}
+            m1 = {tag for tag, terms in materials.items() if any(term in text1 for term in terms)}
+            m2 = {tag for tag, terms in materials.items() if any(term in text2 for term in terms)}
             if m1 and m2 and m1 != m2:
                 return True
 
-            # D. Feature check (e.g., Linking chairs vs Non-Linking chairs)
+            # G. Feature Flags (e.g., Linking Chairs)
             if ('linking' in text1) != ('linking' in text2):
                 return True
 
@@ -106,7 +130,6 @@ if uploaded_file is not None:
         results = []
         processed_urls = set()
 
-        # 4. Streamlit Web Progress Bar
         progress_bar = st.progress(0)
         status_text = st.empty()
         total_rows = len(df)
@@ -122,8 +145,8 @@ if uploaded_file is not None:
             if url in processed_urls:
                 continue
 
-            # Skip matching if title/H1 fingerprint is too short/empty
-            if len(current_fingerprint.strip()) < 8:
+            # Skip matching if title/H1 fingerprint is under 8 characters or generic short URL
+            if len(current_fingerprint.strip()) < 8 or re.search(r'/[0-9]{1,3}$', str(url)):
                 results.append({
                     'URL': url,
                     'Canonical': url,
@@ -139,7 +162,7 @@ if uploaded_file is not None:
                 potential_matches['fingerprint'].apply(lambda x: fuzz.ratio(current_fingerprint, x) > 85)
             ]
             
-            # Filter out category, shape, material, and feature conflicts
+            # Run multi-layer conflict engine
             valid_urls = []
             for _, m_row in matched_rows.iterrows():
                 if not has_conflict(row, m_row):
@@ -167,7 +190,6 @@ if uploaded_file is not None:
         
         st.success("Yippeee! Matching Is Complete.")
         
-        # 5. Download Button & Reminder
         st.caption("⚠️ Always double-check the output before sending over to a client.")
         csv_data = mapping_df.to_csv(index=False).encode('utf-8')
         st.download_button(
