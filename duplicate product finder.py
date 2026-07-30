@@ -52,14 +52,50 @@ if uploaded_file is not None:
             score -= len(url_str) * 0.1
             return score
 
-        # Prevent cross-category matches (e.g. desks vs chairs)
-        def has_category_conflict(url1, url2):
-            u1, u2 = str(url1).lower(), str(url2).lower()
-            categories = ['chair', 'desk', 'table', 'storage', 'screen', 'bench', 'tray']
-            u1_cats = {c for c in categories if c in u1}
-            u2_cats = {c for c in categories if c in u2}
-            if u1_cats and u2_cats and u1_cats != u2_cats:
+        # Multi-layer conflict detector (Category, Shape, Material, & Features)
+        def has_conflict(row1, row2):
+            text1 = f"{row1['fingerprint']} {row1['Address']}".lower()
+            text2 = f"{row2['fingerprint']} {row2['Address']}".lower()
+
+            # A. Category check
+            categories = ['chair', 'desk', 'table', 'storage', 'screen', 'bench', 'tray', 'cabinet', 'bookcase']
+            c1 = {c for c in categories if c in text1}
+            c2 = {c for c in categories if c in text2}
+            if c1 and c2 and c1 != c2:
                 return True
+
+            # B. Shape check
+            shape_groups = {
+                'rect': ['rectangular', 'rectangle'],
+                'circ': ['circular', 'round'],
+                'sq': ['square'],
+                'oval': ['oval'],
+                'trap': ['trapezoidal', 'trapezoid'],
+                'semi_circ': ['semi-circular', 'semicircular'],
+                'hex': ['hexagonal', 'hexagon']
+            }
+            s1 = {tag for tag, terms in shape_groups.items() if any(term in text1 for term in terms)}
+            s2 = {tag for tag, terms in shape_groups.items() if any(term in text2 for term in terms)}
+            if s1 and s2 and s1 != s2:
+                return True
+
+            # C. Material & Finish check (e.g., Seat Pad vs Wooden Seat)
+            material_groups = {
+                'padded': ['seat pad', 'padded', 'upholstered', 'cushion', 'fabric seat'],
+                'wooden': ['beech', 'wooden', 'wood', 'plywood', 'timber'],
+                'plastic': ['plastic', 'polypropylene', 'poly'],
+                'mesh': ['mesh'],
+                'leather': ['leather', 'vinyl']
+            }
+            m1 = {tag for tag, terms in material_groups.items() if any(term in text1 for term in terms)}
+            m2 = {tag for tag, terms in material_groups.items() if any(term in text2 for term in terms)}
+            if m1 and m2 and m1 != m2:
+                return True
+
+            # D. Feature check (e.g., Linking chairs vs Non-Linking chairs)
+            if ('linking' in text1) != ('linking' in text2):
+                return True
+
             return False
 
         df['cleaned_Title 1'] = df['Title 1'].apply(clean_text)
@@ -86,7 +122,7 @@ if uploaded_file is not None:
             if url in processed_urls:
                 continue
 
-            # GUARDRAIL 1: Skip matching if title/H1 fingerprint is too short/empty
+            # Skip matching if title/H1 fingerprint is too short/empty
             if len(current_fingerprint.strip()) < 8:
                 results.append({
                     'URL': url,
@@ -103,11 +139,11 @@ if uploaded_file is not None:
                 potential_matches['fingerprint'].apply(lambda x: fuzz.ratio(current_fingerprint, x) > 85)
             ]
             
-            # GUARDRAIL 2: Filter out category conflicts (e.g., desks matching chairs)
-            valid_urls = [
-                m_url for m_url in matched_rows['Address'].tolist()
-                if not has_category_conflict(url, m_url)
-            ]
+            # Filter out category, shape, material, and feature conflicts
+            valid_urls = []
+            for _, m_row in matched_rows.iterrows():
+                if not has_conflict(row, m_row):
+                    valid_urls.append(m_row['Address'])
 
             if valid_urls:
                 canonical = max(valid_urls, key=url_quality_score)
