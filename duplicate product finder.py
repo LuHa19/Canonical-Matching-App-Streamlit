@@ -9,49 +9,27 @@ st.write("Upload your HTML crawl export CSV to map duplicate products to their b
 # 1. File Uploader UI Widget
 uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
 
-# Helper function to auto-detect column headers
-def find_column(df, candidates):
-    for col in df.columns:
-        if col.strip().lower() in [c.lower() for c in candidates]:
-            return col
-    return None
+# 2. Interactive Control Settings
+default_noise = "next-day-delivery, fully-installed, express-delivery, delivery, fast, shipping, free, in-stock, sale, express"
+noise_input = st.text_input(
+    "Boilerplate/Noise words to ignore (separated by commas):", 
+    value=default_noise,
+    help="Add words that appear in titles/H1s that should be ignored during product matching."
+)
+
+similarity_threshold = st.slider(
+    "Fuzzy Matching Similarity Threshold (%)",
+    min_value=70,
+    max_value=100,
+    value=95,
+    step=1,
+    help="Higher values require tighter title alignment. Token-set matching handles word order differences."
+)
 
 if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
     st.success("File uploaded successfully!")
     
-    # Auto-detect standard columns or let user select them
-    default_url_col = find_column(df, ['Address', 'URL', 'Url', 'Page Address', 'Link'])
-    default_title_col = find_column(df, ['Title 1', 'Title', 'Meta Title 1', 'Page Title', 'Meta Title', 'Title1'])
-    default_h1_col = find_column(df, ['H1-1', 'H1', 'Heading 1', 'H1-1 Title', 'H1 1', 'H11'])
-
-    st.subheader("📋 Column Mapping")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        url_col = st.selectbox("URL Column", df.columns, index=df.columns.get_loc(default_url_col) if default_url_col in df.columns else 0)
-    with col2:
-        title_col = st.selectbox("Title Column", df.columns, index=df.columns.get_loc(default_title_col) if default_title_col in df.columns else 0)
-    with col3:
-        h1_col = st.selectbox("H1 Column (Optional)", ["None"] + list(df.columns), index=list(df.columns).index(default_h1_col)+1 if default_h1_col in df.columns else 0)
-
-    # 2. Interactive Control Settings
-    default_noise = "next-day-delivery, fully-installed, express-delivery, delivery, fast, shipping, free, in-stock, sale, express"
-    noise_input = st.text_input(
-        "Boilerplate/Noise words to ignore (separated by commas):", 
-        value=default_noise,
-        help="Add words that appear in titles/H1s that should be ignored during product matching."
-    )
-
-    similarity_threshold = st.slider(
-        "Fuzzy Matching Similarity Threshold (%)",
-        min_value=70,
-        max_value=100,
-        value=95,
-        step=1,
-        help="Higher values require tighter title alignment. Token-set matching handles word order differences."
-    )
-
     # 3. Process Button
     if st.button("Run Canonical Matching"):
         NOISE_WORDS = [word.strip().lower() for word in noise_input.split(",") if word.strip()]
@@ -60,6 +38,7 @@ if uploaded_file is not None:
             if not isinstance(text, str):
                 return ""
             text = text.lower()
+            # Remove trademark/registered symbols
             text = re.sub(r'[™®©]', '', text)
             for word in NOISE_WORDS:
                 text = re.sub(r'\b' + re.escape(word) + r'\b', '', text)
@@ -68,14 +47,15 @@ if uploaded_file is not None:
         # Extract 1-4 digit spec numbers (e.g. 11, 14 years or 1200mm)
         def get_numbers(row):
             fingerprint = str(row['fingerprint'])
-            url_path = str(row['Address_internal'])
+            url_path = str(row['Address'])
             combined = f"{fingerprint} {url_path}"
             return frozenset(re.findall(r'\b\d{1,4}\b', combined))
 
-        # URL SEO Quality Score
+        # URL SEO Quality Score (Penalizes numeric URLs like /123027.html to prefer descriptive slugs)
         def url_quality_score(url):
             url_str = str(url).lower()
             score = 0
+            # Strong penalty for numeric SKU URLs so clean slugs always win canonical
             if re.search(r'/[0-9]{4,8}[a-z]?\.html', url_str):
                 score -= 500
             if 'delivery' in url_str or re.search(r'/[0-9]{1,3}$', url_str):
@@ -86,9 +66,9 @@ if uploaded_file is not None:
 
         # Multi-layer Conflict Engine
         def has_conflict(row1, row2):
-            text1 = f"{row1['fingerprint']} {row1['Address_internal']}".lower()
-            text2 = f"{row2['fingerprint']} {row2['Address_internal']}".lower()
-            u1, u2 = str(row1['Address_internal']).lower(), str(row2['Address_internal']).lower()
+            text1 = f"{row1['fingerprint']} {row1['Address']}".lower()
+            text2 = f"{row2['fingerprint']} {row2['Address']}".lower()
+            u1, u2 = str(row1['Address']).lower(), str(row2['Address']).lower()
 
             # A. Collection/Range Slug Check
             c1 = re.search(r'/collections/([a-z0-9-]+)', u1)
@@ -159,16 +139,9 @@ if uploaded_file is not None:
 
             return False
 
-        # Internal standardization
-        df['Address_internal'] = df[url_col]
-        df['cleaned_Title'] = df[title_col].apply(clean_text)
-        
-        if h1_col != "None" and h1_col in df.columns:
-            df['cleaned_H1'] = df[h1_col].apply(clean_text)
-            df['fingerprint'] = df['cleaned_Title'] + " " + df['cleaned_H1']
-        else:
-            df['fingerprint'] = df['cleaned_Title']
-
+        df['cleaned_Title 1'] = df['Title 1'].apply(clean_text)
+        df['cleaned_H1-1'] = df['H1-1'].apply(clean_text)
+        df['fingerprint'] = df['cleaned_Title 1'] + " " + df['cleaned_H1-1']
         df['extracted_numbers'] = df.apply(get_numbers, axis=1)
 
         results = []
@@ -179,7 +152,7 @@ if uploaded_file is not None:
         total_rows = len(df)
 
         for index, row in df.iterrows():
-            url = row['Address_internal']
+            url = row['Address']
             current_fingerprint = row['fingerprint']
             current_numbers = row['extracted_numbers']
             
@@ -189,6 +162,7 @@ if uploaded_file is not None:
             if url in processed_urls:
                 continue
 
+            # Skip matching if title/H1 fingerprint is under 8 characters or generic short URL
             if len(current_fingerprint.strip()) < 8 or re.search(r'/[0-9]{1,3}$', str(url)):
                 results.append({
                     'URL': url,
@@ -200,16 +174,18 @@ if uploaded_file is not None:
 
             potential_matches = df[df['extracted_numbers'] == current_numbers]
             
+            # Token-set fuzzy matching: allows title token matches regardless of minor word variations
             matched_rows = potential_matches[
                 potential_matches['fingerprint'].apply(
                     lambda x: fuzz.token_set_ratio(current_fingerprint, x) >= similarity_threshold
                 )
             ]
             
+            # Run multi-layer conflict engine
             valid_urls = []
             for _, m_row in matched_rows.iterrows():
                 if not has_conflict(row, m_row):
-                    valid_urls.append(m_row['Address_internal'])
+                    valid_urls.append(m_row['Address'])
 
             if valid_urls:
                 canonical = max(valid_urls, key=url_quality_score)
