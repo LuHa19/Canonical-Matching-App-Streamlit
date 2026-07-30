@@ -79,8 +79,16 @@ if uploaded_file is not None:
             if not group.empty:
                 urls_in_group = group['Address'].tolist()
                 canonical = max(urls_in_group, key=url_quality_score)
+                
                 for u in urls_in_group:
-                    results.append({'URL': u, 'Canonical': canonical})
+                    # NEW: Checks if the URL matches the canonical target
+                    is_self_ref = "Yes" if u == canonical else "No"
+                    
+                    results.append({
+                        'URL': u, 
+                        'Canonical': canonical,
+                        'Is Self-Referencing': is_self_ref
+                    })
                     processed_urls.add(u)
 
         mapping_df = pd.DataFrame(results)
