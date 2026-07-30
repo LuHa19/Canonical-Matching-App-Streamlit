@@ -3,7 +3,7 @@ import pandas as pd
 import re
 from rapidfuzz import fuzz
 
-st.title("SEO Canonical Finder Tool 🚀")
+st.title("Luke's Canonical Finder Tool 🔎")
 st.write("Upload your HTML crawl export CSV to map duplicate products to their best canonical URL.")
 
 # 1. File Uploader UI Widget
@@ -77,9 +77,10 @@ if uploaded_file is not None:
 
         mapping_df = pd.DataFrame(results)
         
-        st.success("Matching Complete!")
+        st.success("Yippeee! Matching Is Complete.")
         
         # 4. Download Button
+        st.caption("⚠️ Always double-check the output before sending over to a client.")
         csv_data = mapping_df.to_csv(index=False).encode('utf-8')
         st.download_button(
             label="📥 Download Canonical Mapping CSV",
