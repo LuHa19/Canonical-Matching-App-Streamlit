@@ -9,8 +9,8 @@ st.write("Upload your HTML crawl export CSV to map duplicate products to their b
 # 1. File Uploader UI Widget
 uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
 
-# 2. Interactive Control Settings (Noise Words & Strictness Slider)
-default_noise = "next-day-delivery, fully-installed, express-delivery, delivery, fast, shipping, free, in-stock, sale"
+# 2. Interactive Control Settings
+default_noise = "next-day-delivery, fully-installed, express-delivery, delivery, fast, shipping, free, in-stock, sale, express"
 noise_input = st.text_input(
     "Boilerplate/Noise words to ignore (separated by commas):", 
     value=default_noise,
@@ -23,7 +23,7 @@ similarity_threshold = st.slider(
     max_value=100,
     value=95,
     step=1,
-    help="Higher values (like 95%) are much stricter and require almost identical titles to match."
+    help="Higher values require tighter title alignment. Token-set matching handles word order differences."
 )
 
 if uploaded_file is not None:
@@ -38,24 +38,27 @@ if uploaded_file is not None:
             if not isinstance(text, str):
                 return ""
             text = text.lower()
+            # Remove trademark/registered symbols
+            text = re.sub(r'[™®©]', '', text)
             for word in NOISE_WORDS:
-                text = text.replace(word, "")
-            return text.strip()
+                text = re.sub(r'\b' + re.escape(word) + r'\b', '', text)
+            return re.sub(r'\s+', ' ', text).strip()
 
-        # Extract numbers from Title/H1 fingerprint AND URL path
+        # Extract 1-4 digit spec numbers (e.g. 11, 14 years or 1200mm)
         def get_numbers(row):
             fingerprint = str(row['fingerprint'])
             url_path = str(row['Address'])
             combined = f"{fingerprint} {url_path}"
             return frozenset(re.findall(r'\b\d{1,4}\b', combined))
 
-        # URL SEO Quality Score
+        # URL SEO Quality Score (Penalizes numeric URLs like /123027.html to prefer descriptive slugs)
         def url_quality_score(url):
             url_str = str(url).lower()
             score = 0
-            if 'delivery' in url_str or '/1' in url_str:
-                score -= 50
-            if re.search(r'/[a-z0-9]{4,8}\.html', url_str):
+            # Strong penalty for numeric SKU URLs so clean slugs always win canonical
+            if re.search(r'/[0-9]{4,8}[a-z]?\.html', url_str):
+                score -= 500
+            if 'delivery' in url_str or re.search(r'/[0-9]{1,3}$', url_str):
                 score -= 100
             score += (url_str.count('-') * 10)
             score -= len(url_str) * 0.1
@@ -67,19 +70,13 @@ if uploaded_file is not None:
             text2 = f"{row2['fingerprint']} {row2['Address']}".lower()
             u1, u2 = str(row1['Address']).lower(), str(row2['Address']).lower()
 
-            # A. Collection/Range Slug Check (e.g., /castle vs /aven)
+            # A. Collection/Range Slug Check
             c1 = re.search(r'/collections/([a-z0-9-]+)', u1)
             c2 = re.search(r'/collections/([a-z0-9-]+)', u2)
             if c1 and c2 and c1.group(1) != c2.group(1):
                 return True
 
-            # B. Numeric SKU Conflict (e.g., 120716c vs 120679c)
-            sku1 = re.findall(r'\b\d{5,6}[a-z]?\b', u1)
-            sku2 = re.findall(r'\b\d{5,6}[a-z]?\b', u2)
-            if sku1 and sku2 and set(sku1) != set(sku2):
-                return True
-
-            # C. Color & Finish Guardrail (e.g., White vs Beech vs Unspecified)
+            # B. Color & Finish Guardrail
             colors = [
                 'white', 'black', 'grey', 'gray', 'silver', 'beech', 'oak', 
                 'maple', 'walnut', 'ash', 'teak', 'pine', 'blue', 'red', 
@@ -90,14 +87,14 @@ if uploaded_file is not None:
             if col1 != col2:
                 return True
 
-            # D. Tray Depth & Spec Check (e.g., Shallow vs Extra Deep)
+            # C. Tray Depth & Spec Check
             depths = ['shallow', 'extra deep', 'deep', 'jumbo']
             d1 = {d for d in depths if d in text1}
             d2 = {d for d in depths if d in text2}
             if d1 and d2 and d1 != d2:
                 return True
 
-            # E. Strict Shape Check (Semi-Circular vs Circular vs Rectangular vs Square)
+            # D. Strict Shape Check
             shapes = {}
             for text, key in [(text1, 's1'), (text2, 's2')]:
                 tags = set()
@@ -117,14 +114,14 @@ if uploaded_file is not None:
             if shapes['s1'] and shapes['s2'] and shapes['s1'] != shapes['s2']:
                 return True
 
-            # F. Category Check
+            # E. Category Check
             categories = ['chair', 'desk', 'table', 'storage', 'screen', 'bench', 'tray', 'cabinet', 'bookcase']
             cat1 = {c for c in categories if c in text1}
             cat2 = {c for c in categories if c in text2}
             if cat1 and cat2 and cat1 != cat2:
                 return True
 
-            # G. Material & Finish Check
+            # F. Material & Finish Check
             materials = {
                 'padded': ['seat pad', 'padded', 'upholstered', 'cushion', 'fabric seat'],
                 'wooden': ['beech', 'wooden', 'wood', 'plywood', 'timber'],
@@ -136,7 +133,7 @@ if uploaded_file is not None:
             if m1 and m2 and m1 != m2:
                 return True
 
-            # H. Feature Flags (e.g., Linking Chairs)
+            # G. Feature Flags
             if ('linking' in text1) != ('linking' in text2):
                 return True
 
@@ -177,9 +174,11 @@ if uploaded_file is not None:
 
             potential_matches = df[df['extracted_numbers'] == current_numbers]
             
-            # Fuzzy match on fingerprint using user-selected threshold (default 95%)
+            # Token-set fuzzy matching: allows title token matches regardless of minor word variations
             matched_rows = potential_matches[
-                potential_matches['fingerprint'].apply(lambda x: fuzz.ratio(current_fingerprint, x) >= similarity_threshold)
+                potential_matches['fingerprint'].apply(
+                    lambda x: fuzz.token_set_ratio(current_fingerprint, x) >= similarity_threshold
+                )
             ]
             
             # Run multi-layer conflict engine
