@@ -9,13 +9,22 @@ st.write("Upload your HTML crawl export CSV to map duplicate products to their b
 # 1. File Uploader UI Widget
 uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
 
+# 2. Dynamic Noise Words Input Box
+default_noise = "next-day-delivery, fully-installed, express-delivery, delivery, fast, shipping, free, in-stock, sale"
+noise_input = st.text_input(
+    "Boilerplate/Noise words to ignore (separated by commas):", 
+    value=default_noise,
+    help="Add words that appear in titles/H1s that should be ignored during product matching."
+)
+
 if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
     st.success("File uploaded successfully!")
     
-    # 2. Process Button
+    # 3. Process Button
     if st.button("Run Canonical Matching"):
-        NOISE_WORDS = ['next-day-delivery', 'fully-installed', 'express-delivery', 'delivery', 'fast', 'shipping', 'free']
+        # Convert comma-separated string into a clean python list
+        NOISE_WORDS = [word.strip().lower() for word in noise_input.split(",") if word.strip()]
 
         def clean_text(text):
             if not isinstance(text, str):
@@ -48,7 +57,7 @@ if uploaded_file is not None:
         results = []
         processed_urls = set()
 
-        # 3. Native Streamlit Web Progress Bar
+        # 4. Streamlit Web Progress Bar
         progress_bar = st.progress(0)
         status_text = st.empty()
         total_rows = len(df)
@@ -58,7 +67,6 @@ if uploaded_file is not None:
             current_fingerprint = row['fingerprint']
             current_numbers = row['extracted_numbers']
             
-            # Update web progress bar
             progress_bar.progress((index + 1) / total_rows)
             status_text.text(f"Processing row {index + 1} of {total_rows}...")
 
@@ -79,7 +87,7 @@ if uploaded_file is not None:
         
         st.success("Yippeee! Matching Is Complete.")
         
-        # 4. Download Button
+        # 5. Download Button & Reminder
         st.caption("⚠️ Always double-check the output before sending over to a client.")
         csv_data = mapping_df.to_csv(index=False).encode('utf-8')
         st.download_button(
