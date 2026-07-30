@@ -9,12 +9,21 @@ st.write("Upload your HTML crawl export CSV to map duplicate products to their b
 # 1. File Uploader UI Widget
 uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
 
-# 2. Dynamic Noise Words Input Box
+# 2. Interactive Control Settings (Noise Words & Strictness Slider)
 default_noise = "next-day-delivery, fully-installed, express-delivery, delivery, fast, shipping, free, in-stock, sale"
 noise_input = st.text_input(
     "Boilerplate/Noise words to ignore (separated by commas):", 
     value=default_noise,
     help="Add words that appear in titles/H1s that should be ignored during product matching."
+)
+
+similarity_threshold = st.slider(
+    "Fuzzy Matching Similarity Threshold (%)",
+    min_value=70,
+    max_value=100,
+    value=95,
+    step=1,
+    help="Higher values (like 95%) are much stricter and require almost identical titles to match."
 )
 
 if uploaded_file is not None:
@@ -70,14 +79,25 @@ if uploaded_file is not None:
             if sku1 and sku2 and set(sku1) != set(sku2):
                 return True
 
-            # C. Tray Depth & Spec Check (e.g., Shallow vs Extra Deep)
+            # C. Color & Finish Guardrail (e.g., White vs Beech vs Unspecified)
+            colors = [
+                'white', 'black', 'grey', 'gray', 'silver', 'beech', 'oak', 
+                'maple', 'walnut', 'ash', 'teak', 'pine', 'blue', 'red', 
+                'green', 'yellow', 'purple', 'orange', 'pink', 'wenge'
+            ]
+            col1 = {c for c in colors if re.search(r'\b' + c + r'\b', text1)}
+            col2 = {c for c in colors if re.search(r'\b' + c + r'\b', text2)}
+            if col1 != col2:
+                return True
+
+            # D. Tray Depth & Spec Check (e.g., Shallow vs Extra Deep)
             depths = ['shallow', 'extra deep', 'deep', 'jumbo']
             d1 = {d for d in depths if d in text1}
             d2 = {d for d in depths if d in text2}
             if d1 and d2 and d1 != d2:
                 return True
 
-            # D. Strict Shape Check (Semi-Circular vs Circular vs Rectangular vs Square)
+            # E. Strict Shape Check (Semi-Circular vs Circular vs Rectangular vs Square)
             shapes = {}
             for text, key in [(text1, 's1'), (text2, 's2')]:
                 tags = set()
@@ -97,14 +117,14 @@ if uploaded_file is not None:
             if shapes['s1'] and shapes['s2'] and shapes['s1'] != shapes['s2']:
                 return True
 
-            # E. Category Check
+            # F. Category Check
             categories = ['chair', 'desk', 'table', 'storage', 'screen', 'bench', 'tray', 'cabinet', 'bookcase']
             cat1 = {c for c in categories if c in text1}
             cat2 = {c for c in categories if c in text2}
             if cat1 and cat2 and cat1 != cat2:
                 return True
 
-            # F. Material & Finish Check
+            # G. Material & Finish Check
             materials = {
                 'padded': ['seat pad', 'padded', 'upholstered', 'cushion', 'fabric seat'],
                 'wooden': ['beech', 'wooden', 'wood', 'plywood', 'timber'],
@@ -116,7 +136,7 @@ if uploaded_file is not None:
             if m1 and m2 and m1 != m2:
                 return True
 
-            # G. Feature Flags (e.g., Linking Chairs)
+            # H. Feature Flags (e.g., Linking Chairs)
             if ('linking' in text1) != ('linking' in text2):
                 return True
 
@@ -157,9 +177,9 @@ if uploaded_file is not None:
 
             potential_matches = df[df['extracted_numbers'] == current_numbers]
             
-            # Fuzzy match on fingerprint
+            # Fuzzy match on fingerprint using user-selected threshold (default 95%)
             matched_rows = potential_matches[
-                potential_matches['fingerprint'].apply(lambda x: fuzz.ratio(current_fingerprint, x) > 85)
+                potential_matches['fingerprint'].apply(lambda x: fuzz.ratio(current_fingerprint, x) >= similarity_threshold)
             ]
             
             # Run multi-layer conflict engine
