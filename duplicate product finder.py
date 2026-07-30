@@ -23,7 +23,6 @@ if uploaded_file is not None:
     
     # 3. Process Button
     if st.button("Run Canonical Matching"):
-        # Convert comma-separated string into a clean python list
         NOISE_WORDS = [word.strip().lower() for word in noise_input.split(",") if word.strip()]
 
         def clean_text(text):
@@ -35,8 +34,12 @@ if uploaded_file is not None:
             text = re.sub(r'\b\d{5,6}[a-z]?\b', '', text)
             return text.strip()
 
-        def get_numbers(text):
-            return frozenset(re.findall(r'\b\d{1,4}\b', text))
+        # Extract 1-4 digit numbers from BOTH Title/H1 fingerprint and the URL address path
+        def get_numbers(row):
+            fingerprint = str(row['fingerprint'])
+            url_path = str(row['Address'])
+            combined = f"{fingerprint} {url_path}"
+            return frozenset(re.findall(r'\b\d{1,4}\b', combined))
 
         def url_quality_score(url):
             url_str = str(url).lower()
@@ -49,10 +52,20 @@ if uploaded_file is not None:
             score -= len(url_str) * 0.1
             return score
 
+        # Prevent cross-category matches (e.g. desks vs chairs)
+        def has_category_conflict(url1, url2):
+            u1, u2 = str(url1).lower(), str(url2).lower()
+            categories = ['chair', 'desk', 'table', 'storage', 'screen', 'bench', 'tray']
+            u1_cats = {c for c in categories if c in u1}
+            u2_cats = {c for c in categories if c in u2}
+            if u1_cats and u2_cats and u1_cats != u2_cats:
+                return True
+            return False
+
         df['cleaned_Title 1'] = df['Title 1'].apply(clean_text)
         df['cleaned_H1-1'] = df['H1-1'].apply(clean_text)
         df['fingerprint'] = df['cleaned_Title 1'] + " " + df['cleaned_H1-1']
-        df['extracted_numbers'] = df['fingerprint'].apply(get_numbers)
+        df['extracted_numbers'] = df.apply(get_numbers, axis=1)
 
         results = []
         processed_urls = set()
@@ -73,23 +86,46 @@ if uploaded_file is not None:
             if url in processed_urls:
                 continue
 
+            # GUARDRAIL 1: Skip matching if title/H1 fingerprint is too short/empty
+            if len(current_fingerprint.strip()) < 8:
+                results.append({
+                    'URL': url,
+                    'Canonical': url,
+                    'Is Self-Referencing': 'Yes'
+                })
+                processed_urls.add(url)
+                continue
+
             potential_matches = df[df['extracted_numbers'] == current_numbers]
-            group = potential_matches[potential_matches['fingerprint'].apply(lambda x: fuzz.ratio(current_fingerprint, x) > 85)]
             
-            if not group.empty:
-                urls_in_group = group['Address'].tolist()
-                canonical = max(urls_in_group, key=url_quality_score)
-                
-                for u in urls_in_group:
-                    # NEW: Checks if the URL matches the canonical target
+            # Fuzzy match on fingerprint
+            matched_rows = potential_matches[
+                potential_matches['fingerprint'].apply(lambda x: fuzz.ratio(current_fingerprint, x) > 85)
+            ]
+            
+            # GUARDRAIL 2: Filter out category conflicts (e.g., desks matching chairs)
+            valid_urls = [
+                m_url for m_url in matched_rows['Address'].tolist()
+                if not has_category_conflict(url, m_url)
+            ]
+
+            if valid_urls:
+                canonical = max(valid_urls, key=url_quality_score)
+                for u in valid_urls:
                     is_self_ref = "Yes" if u == canonical else "No"
-                    
                     results.append({
                         'URL': u, 
                         'Canonical': canonical,
                         'Is Self-Referencing': is_self_ref
                     })
                     processed_urls.add(u)
+            else:
+                results.append({
+                    'URL': url,
+                    'Canonical': url,
+                    'Is Self-Referencing': 'Yes'
+                })
+                processed_urls.add(url)
 
         mapping_df = pd.DataFrame(results)
         
