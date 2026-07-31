@@ -38,21 +38,27 @@ if uploaded_file is not None:
     with col4:
         desc_col = st.selectbox("Meta Desc (Optional)", ["None"] + list(df.columns), index=list(df.columns).index(default_desc_col)+1 if default_desc_col in df.columns else 0)
 
-    # 2. Interactive Control Settings
+    # 2. Interactive Control Settings & Scoring Strategy
+    st.subheader("⚙️ Matching & Canonical Leader Preferences")
+    
+    col_a, col_b = st.columns(2)
+    with col_a:
+        prefer_clean_hierarchy = st.checkbox("Prefer Cleaner/Higher-Level URLs (Fewer slashes /)", value=True, help="Prefers /office-chairs/aven over /office-chairs/collections/sub/aven")
+        penalize_numeric_skus = st.checkbox("Heavy Penalty on Pure Numeric SKU URLs (e.g. /123033.html)", value=True)
+    
+    with col_b:
+        similarity_threshold = st.slider(
+            "Fuzzy Matching Similarity Threshold (%)",
+            min_value=70,
+            max_value=100,
+            value=95,
+            step=1
+        )
+
     default_noise = "next-day-delivery, fully-installed, express-delivery, delivery, fast, shipping, free, in-stock, sale, express"
     noise_input = st.text_input(
         "Boilerplate/Noise words to ignore (separated by commas):", 
-        value=default_noise,
-        help="Add words that appear in titles/H1s that should be ignored during product matching."
-    )
-
-    similarity_threshold = st.slider(
-        "Fuzzy Matching Similarity Threshold (%)",
-        min_value=70,
-        max_value=100,
-        value=95,
-        step=1,
-        help="Higher values require tighter title alignment. Token-set matching handles word order differences."
+        value=default_noise
     )
 
     # 3. Process Button
@@ -75,16 +81,33 @@ if uploaded_file is not None:
             combined = f"{fingerprint} {url_path}"
             return frozenset(re.findall(r'\b\d{1,4}\b', combined))
 
-        # URL SEO Quality Score
+        # UPGRADED URL Canonical Leader Quality Score
         def url_quality_score(url):
             url_str = str(url).lower()
-            score = 0
-            if re.search(r'/[0-9]{4,8}[a-z]?\.html', url_str):
-                score -= 500
-            if 'delivery' in url_str or re.search(r'/[0-9]{1,3}$', url_str):
-                score -= 100
-            score += (url_str.count('-') * 10)
-            score -= len(url_str) * 0.1
+            score = 1000  # Base starting score
+            
+            # 1. Parameter & Pagination Penalties
+            if '?' in url_str or '&' in url_str:
+                score -= 1000
+            if re.search(r'/[0-9]{1,3}$', url_str):
+                score -= 400
+                
+            # 2. Pure Numeric SKU URLs Penalty
+            if penalize_numeric_skus and re.search(r'/[0-9]{4,8}[a-z]?\.html', url_str):
+                score -= 600
+
+            # 3. Promo / Delivery / Temporary Path Penalties
+            if any(term in url_str for term in ['delivery', 'express', 'sale', 'clearance', 'promo']):
+                score -= 300
+
+            # 4. Folder Depth / Slash Penalty (Prefers higher-level cleaner category paths)
+            if prefer_clean_hierarchy:
+                slash_count = url_str.count('/')
+                score -= (slash_count * 25)
+
+            # 5. Length Penalty (Slightly prefers concise URLs over bloated ones)
+            score -= (len(url_str) * 0.2)
+            
             return score
 
         # Multi-layer Conflict Engine
@@ -197,7 +220,8 @@ if uploaded_file is not None:
                 results.append({
                     'URL': url,
                     'Canonical': url,
-                    'Is Self-Referencing': 'Yes'
+                    'Is Self-Referencing': 'Yes',
+                    'Leader Score': url_quality_score(url)
                 })
                 processed_urls.add(url)
                 continue
@@ -217,19 +241,22 @@ if uploaded_file is not None:
 
             if valid_urls:
                 canonical = max(valid_urls, key=url_quality_score)
+                canonical_score = url_quality_score(canonical)
                 for u in valid_urls:
                     is_self_ref = "Yes" if u == canonical else "No"
                     results.append({
                         'URL': u, 
                         'Canonical': canonical,
-                        'Is Self-Referencing': is_self_ref
+                        'Is Self-Referencing': is_self_ref,
+                        'Leader Score': canonical_score
                     })
                     processed_urls.add(u)
             else:
                 results.append({
                     'URL': url,
                     'Canonical': url,
-                    'Is Self-Referencing': 'Yes'
+                    'Is Self-Referencing': 'Yes',
+                    'Leader Score': url_quality_score(url)
                 })
                 processed_urls.add(url)
 
