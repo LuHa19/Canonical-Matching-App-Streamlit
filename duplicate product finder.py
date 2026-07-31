@@ -20,13 +20,14 @@ if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
     st.success("File uploaded successfully!")
     
-    # Auto-detect standard columns or let user select them
+    # Auto-detect standard columns
     default_url_col = find_column(df, ['Address', 'URL', 'Url', 'Page Address', 'Link'])
     default_title_col = find_column(df, ['Title 1', 'Title', 'Meta Title 1', 'Page Title', 'Meta Title', 'Title1'])
     default_h1_col = find_column(df, ['H1-1', 'H1', 'Heading 1', 'H1-1 Title', 'H1 1', 'H11'])
+    default_desc_col = find_column(df, ['Meta Description 1', 'Meta Description', 'Description 1', 'Description', 'Meta Desc'])
 
     st.subheader("📋 Column Mapping")
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         url_col = st.selectbox("URL Column", df.columns, index=df.columns.get_loc(default_url_col) if default_url_col in df.columns else 0)
@@ -34,6 +35,8 @@ if uploaded_file is not None:
         title_col = st.selectbox("Title Column", df.columns, index=df.columns.get_loc(default_title_col) if default_title_col in df.columns else 0)
     with col3:
         h1_col = st.selectbox("H1 Column (Optional)", ["None"] + list(df.columns), index=list(df.columns).index(default_h1_col)+1 if default_h1_col in df.columns else 0)
+    with col4:
+        desc_col = st.selectbox("Meta Desc (Optional)", ["None"] + list(df.columns), index=list(df.columns).index(default_desc_col)+1 if default_desc_col in df.columns else 0)
 
     # 2. Interactive Control Settings
     default_noise = "next-day-delivery, fully-installed, express-delivery, delivery, fast, shipping, free, in-stock, sale, express"
@@ -159,16 +162,17 @@ if uploaded_file is not None:
 
             return False
 
-        # Internal standardization
+        # Internal standardization & Fingerprint building
         df['Address_internal'] = df[url_col]
-        df['cleaned_Title'] = df[title_col].apply(clean_text)
+        fingerprint_series = df[title_col].apply(clean_text)
         
         if h1_col != "None" and h1_col in df.columns:
-            df['cleaned_H1'] = df[h1_col].apply(clean_text)
-            df['fingerprint'] = df['cleaned_Title'] + " " + df['cleaned_H1']
-        else:
-            df['fingerprint'] = df['cleaned_Title']
+            fingerprint_series = fingerprint_series + " " + df[h1_col].apply(clean_text)
+            
+        if desc_col != "None" and desc_col in df.columns:
+            fingerprint_series = fingerprint_series + " " + df[desc_col].apply(clean_text)
 
+        df['fingerprint'] = fingerprint_series
         df['extracted_numbers'] = df.apply(get_numbers, axis=1)
 
         results = []
