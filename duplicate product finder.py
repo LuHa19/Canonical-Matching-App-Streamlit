@@ -4,7 +4,7 @@ import re
 from urllib.parse import urlparse
 from rapidfuzz import fuzz
 
-st.title("Luke's Canonical Finder & SEO Engine 🔎")
+st.title("Luke's Canonical Finder🔎")
 st.write("Upload your HTML crawl export CSV to map duplicate products to their best canonical URL.")
 
 # 1. File Uploader UI Widget
@@ -53,7 +53,6 @@ if uploaded_file is not None:
         default_noise = "next-day-delivery, fully-installed, express-delivery, delivery, fast, shipping, free, in-stock, sale, express"
         noise_input = st.text_input("Boilerplate/Noise words to ignore:", value=default_noise)
 
-    # Keywords to automatically strip for base product matching
     STRIP_KEYWORDS = ["next day delivery", "fully installed", "next-day-delivery", "fully-installed"]
 
     # 2. Strict SEO Scoring Hierarchy Engine
@@ -92,130 +91,135 @@ if uploaded_file is not None:
         
         return score
 
-    # 3. Process Button
+    # 3. Process Button with Live Feedback
     if st.button("Run Canonical Matching"):
-        NOISE_WORDS = [word.strip().lower() for word in noise_input.split(",") if word.strip()]
+        with st.spinner("Analyzing CSV & running canonical engine... Please wait!"):
+            NOISE_WORDS = [word.strip().lower() for word in noise_input.split(",") if word.strip()]
 
-        def clean_text(text):
-            if not isinstance(text, str):
-                return ""
-            text = text.lower()
-            text = re.sub(r'[™®©]', '', text)
-            
-            # Strip intent keywords (Next Day Delivery, Fully Installed, etc.)
-            for kw in STRIP_KEYWORDS:
-                text = re.sub(re.escape(kw.lower()), "", text)
+            def clean_text(text):
+                if not isinstance(text, str):
+                    return ""
+                text = text.lower()
+                text = re.sub(r'[™®©]', '', text)
                 
-            for word in NOISE_WORDS:
-                text = re.sub(r'\b' + re.escape(word) + r'\b', '', text)
+                for kw in STRIP_KEYWORDS:
+                    text = re.sub(re.escape(kw.lower()), "", text)
+                    
+                for word in NOISE_WORDS:
+                    text = re.sub(r'\b' + re.escape(word) + r'\b', '', text)
+                    
+                return re.sub(r'\s+', ' ', text).strip()
+
+            def get_numbers(row):
+                fingerprint = str(row['fingerprint'])
+                url_path = str(row['Address_internal'])
+                combined = f"{fingerprint} {url_path}"
+                return frozenset(re.findall(r'\b\d{1,4}\b', combined))
+
+            def has_conflict(row1, row2):
+                text1 = f"{row1['fingerprint']} {row1['Address_internal']}".lower()
+                text2 = f"{row2['fingerprint']} {row2['Address_internal']}".lower()
+
+                colors = ['white', 'black', 'grey', 'gray', 'silver', 'beech', 'oak', 'maple', 'walnut', 'ash', 'blue', 'red', 'green', 'yellow', 'purple', 'orange']
+                col1 = {c for c in colors if re.search(r'\b' + c + r'\b', text1)}
+                col2 = {c for c in colors if re.search(r'\b' + c + r'\b', text2)}
+                if col1 != col2:
+                    return True
+
+                shapes = {}
+                for text, key in [(text1, 's1'), (text2, 's2')]:
+                    tags = set()
+                    if any(term in text for term in ['semi-circular', 'semi circular', 'semicircular']):
+                        tags.add('semi_circ')
+                    elif any(term in text for term in ['circular', 'circle', 'round']):
+                        tags.add('circ')
+                    if any(term in text for term in ['rectangular', 'rectangle']):
+                        tags.add('rect')
+                    if 'square' in text:
+                        tags.add('sq')
+                    shapes[key] = tags
+
+                if shapes['s1'] and shapes['s2'] and shapes['s1'] != shapes['s2']:
+                    return True
+
+                return False
+
+            # Internal Standardization
+            df['Address_internal'] = df[url_col]
+            fingerprint_series = df[title_col].apply(clean_text)
+            
+            if h1_col != "None" and h1_col in df.columns:
+                fingerprint_series = fingerprint_series + " " + df[h1_col].apply(clean_text)
                 
-            return re.sub(r'\s+', ' ', text).strip()
+            if desc_col != "None" and desc_col in df.columns:
+                fingerprint_series = fingerprint_series + " " + df[desc_col].apply(clean_text)
 
-        def get_numbers(row):
-            fingerprint = str(row['fingerprint'])
-            url_path = str(row['Address_internal'])
-            combined = f"{fingerprint} {url_path}"
-            return frozenset(re.findall(r'\b\d{1,4}\b', combined))
+            df['fingerprint'] = fingerprint_series
+            df['extracted_numbers'] = df.apply(get_numbers, axis=1)
 
-        def has_conflict(row1, row2):
-            text1 = f"{row1['fingerprint']} {row1['Address_internal']}".lower()
-            text2 = f"{row2['fingerprint']} {row2['Address_internal']}".lower()
-            u1, u2 = str(row1['Address_internal']).lower(), str(row2['Address_internal']).lower()
-
-            # Color & Finish Guardrail
-            colors = ['white', 'black', 'grey', 'gray', 'silver', 'beech', 'oak', 'maple', 'walnut', 'ash', 'blue', 'red', 'green', 'yellow', 'purple', 'orange']
-            col1 = {c for c in colors if re.search(r'\b' + c + r'\b', text1)}
-            col2 = {c for c in colors if re.search(r'\b' + c + r'\b', text2)}
-            if col1 != col2:
-                return True
-
-            # Strict Shape Check
-            shapes = {}
-            for text, key in [(text1, 's1'), (text2, 's2')]:
-                tags = set()
-                if any(term in text for term in ['semi-circular', 'semi circular', 'semicircular']):
-                    tags.add('semi_circ')
-                elif any(term in text for term in ['circular', 'circle', 'round']):
-                    tags.add('circ')
-                if any(term in text for term in ['rectangular', 'rectangle']):
-                    tags.add('rect')
-                if 'square' in text:
-                    tags.add('sq')
-                shapes[key] = tags
-
-            if shapes['s1'] and shapes['s2'] and shapes['s1'] != shapes['s2']:
-                return True
-
-            return False
-
-        # Internal Standardization
-        df['Address_internal'] = df[url_col]
-        fingerprint_series = df[title_col].apply(clean_text)
-        
-        if h1_col != "None" and h1_col in df.columns:
-            fingerprint_series = fingerprint_series + " " + df[h1_col].apply(clean_text)
+            results = []
+            processed_urls = set()
+            total_rows = len(df)
             
-        if desc_col != "None" and desc_col in df.columns:
-            fingerprint_series = fingerprint_series + " " + df[desc_col].apply(clean_text)
+            # Placeholders for live visual updates
+            status_text = st.empty()
+            progress_bar = st.progress(0)
 
-        df['fingerprint'] = fingerprint_series
-        df['extracted_numbers'] = df.apply(get_numbers, axis=1)
+            for index, row in df.iterrows():
+                url = row['Address_internal']
+                current_fingerprint = row['fingerprint']
+                current_numbers = row['extracted_numbers']
+                
+                # Live visual UI updates
+                pct_complete = int(((index + 1) / total_rows) * 100)
+                status_text.text(f" Processing row {index + 1} of {total_rows} ({pct_complete}% complete)...")
+                progress_bar.progress((index + 1) / total_rows)
 
-        results = []
-        processed_urls = set()
-        total_rows = len(df)
-        progress_bar = st.progress(0)
+                if url in processed_urls:
+                    continue
 
-        for index, row in df.iterrows():
-            url = row['Address_internal']
-            current_fingerprint = row['fingerprint']
-            current_numbers = row['extracted_numbers']
-            
-            progress_bar.progress((index + 1) / total_rows)
+                potential_matches = df[df['extracted_numbers'] == current_numbers]
+                matched_rows = potential_matches[
+                    potential_matches['fingerprint'].apply(
+                        lambda x: fuzz.token_set_ratio(current_fingerprint, x) >= similarity_threshold
+                    )
+                ]
 
-            if url in processed_urls:
-                continue
+                valid_urls = []
+                for _, m_row in matched_rows.iterrows():
+                    if not has_conflict(row, m_row):
+                        valid_urls.append(m_row['Address_internal'])
 
-            potential_matches = df[df['extracted_numbers'] == current_numbers]
-            matched_rows = potential_matches[
-                potential_matches['fingerprint'].apply(
-                    lambda x: fuzz.token_set_ratio(current_fingerprint, x) >= similarity_threshold
-                )
-            ]
-
-            valid_urls = []
-            for _, m_row in matched_rows.iterrows():
-                if not has_conflict(row, m_row):
-                    valid_urls.append(m_row['Address_internal'])
-
-            if valid_urls:
-                canonical = max(valid_urls, key=url_quality_score)
-                canonical_score = url_quality_score(canonical)
-                for u in valid_urls:
+                if valid_urls:
+                    canonical = max(valid_urls, key=url_quality_score)
+                    canonical_score = url_quality_score(canonical)
+                    for u in valid_urls:
+                        results.append({
+                            'URL': u, 
+                            'Canonical': canonical,
+                            'Is Self-Referencing': 'Yes' if u == canonical else 'No',
+                            'Canonical Score': canonical_score
+                        })
+                        processed_urls.add(u)
+                else:
                     results.append({
-                        'URL': u, 
-                        'Canonical': canonical,
-                        'Is Self-Referencing': 'Yes' if u == canonical else 'No',
-                        'Canonical Score': canonical_score
+                        'URL': url,
+                        'Canonical': url,
+                        'Is Self-Referencing': 'Yes',
+                        'Canonical Score': url_quality_score(url)
                     })
-                    processed_urls.add(u)
-            else:
-                results.append({
-                    'URL': url,
-                    'Canonical': url,
-                    'Is Self-Referencing': 'Yes',
-                    'Canonical Score': url_quality_score(url)
-                })
-                processed_urls.add(url)
+                    processed_urls.add(url)
 
-        mapping_df = pd.DataFrame(results)
-        
-        st.success("Yippeee! Canonical Matching Complete.")
-        
-        csv_data = mapping_df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 Download Canonical Mapping CSV",
-            data=csv_data,
-            file_name="canonical_mapping.csv",
-            mime="text/csv"
-        )
+            # Clear status text when done
+            status_text.empty()
+            mapping_df = pd.DataFrame(results)
+            
+            st.success("Yippeee! Canonical Matching Complete.")
+            
+            csv_data = mapping_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download Canonical Mapping CSV",
+                data=csv_data,
+                file_name="canonical_mapping.csv",
+                mime="text/csv"
+            )
